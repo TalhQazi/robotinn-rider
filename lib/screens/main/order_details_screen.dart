@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../theme/app_colors.dart';
@@ -24,13 +26,36 @@ class OrderDetailsScreen extends StatefulWidget {
 class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   late OrderModel _currentOrder;
   bool _isLoading = false;
+  StreamSubscription<DocumentSnapshot>? _orderSubscription;
 
   @override
   void initState() {
     super.initState();
     _currentOrder = widget.order;
-    _refreshOrder();
+    _setupOrderListener();
     _checkLocationTracking();
+  }
+
+  void _setupOrderListener() {
+    _orderSubscription?.cancel();
+    _orderSubscription = FirebaseFirestore.instance
+        .collection('orders')
+        .doc(_currentOrder.id)
+        .snapshots()
+        .listen((snap) {
+      if (snap.exists && mounted) {
+        setState(() {
+          _currentOrder = OrderModel.fromFirestore(snap);
+        });
+        _checkLocationTracking();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _orderSubscription?.cancel();
+    super.dispose();
   }
 
   void _checkLocationTracking() {
@@ -128,8 +153,8 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   void _handleCancelPress() {
     ThemedAlert.show(
       context,
-      title: 'Cancel Order',
-      message: 'Select a reason for cancelling this order. The customer and admin will be notified.',
+      title: 'Decline / Unassign Order',
+      message: 'Select a reason for declining this order. The order will be returned to the available queue for another rider to claim.',
       buttons: [
         AlertActionItem(
           text: 'Item not available at store',
@@ -156,13 +181,27 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
   void _cancelWithReason(String reason) async {
     setState(() => _isLoading = true);
     try {
-      final updated = await RiderApiService.updateOrderStatus(
+      await RiderApiService.declineOrCancelOrder(
         _currentOrder.id,
-        OrderStatusConstants.cancelled,
-        notes: reason,
+        reason,
       );
       LocationTrackerService.stopTracking(true);
-      setState(() => _currentOrder = updated);
+      if (mounted) {
+        ThemedAlert.show(
+          context,
+          title: 'Order Unassigned',
+          message: 'You have declined this order. It has been returned to the available queue for another rider.',
+          buttons: [
+            AlertActionItem(
+              text: 'OK',
+              onPress: () {
+                Navigator.of(context).pop(); // close alert
+                Navigator.of(context).pop(); // pop order details screen
+              },
+            ),
+          ],
+        );
+      }
     } catch (e) {
       if (mounted) {
         ThemedAlert.show(context, title: 'Error', message: e.toString());
@@ -178,7 +217,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       return;
     }
     try {
-      final convId = await RiderApiService.startConversation(_currentOrder.customerId, _currentOrder.orderId);
+      final convId = await RiderApiService.startConversation(
+        _currentOrder.customerId,
+        _currentOrder.orderId,
+        _currentOrder.customerName,
+      );
       if (mounted) {
         Navigator.of(context).pushNamed(
           '/chat',
@@ -623,24 +666,98 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
       );
     }
 
-    if (status == OrderStatusConstants.billApproved ||
-        status == OrderStatusConstants.adjustmentPending ||
-        status == OrderStatusConstants.outForDelivery) {
+    if (status == OrderStatusConstants.adjustmentPending) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF7ED),
+          borderRadius: BorderRadius.circular(AppSpacing.radiusMedium),
+          border: Border.all(color: const Color(0xFFFDBA74)),
+        ),
+        child: Column(
+          children: [
+            const Icon(Icons.hourglass_bottom_rounded, color: Color(0xFFEA580C), size: 36),
+            const SizedBox(height: 8),
+            const Text(
+              'Awaiting Customer Bill Approval',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF9A3412)),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Admin sent the verified bill to the customer. Waiting for customer approval before you head out for delivery.',
+              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            CustomButton(
+              text: 'Contact Customer',
+              isOutlined: true,
+              icon: Icons.chat_bubble_outline,
+              onPressed: _openChat,
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (status == OrderStatusConstants.billApproved) {
       return Column(
         children: [
-          if (status != OrderStatusConstants.outForDelivery)
-            CustomButton(
-              text: 'Out for Delivery',
-              icon: Icons.delivery_dining,
-              onPressed: () => _handleStatusUpdate(OrderStatusConstants.outForDelivery, 'Leaving for the customer now?'),
+          Container(
+            padding: const EdgeInsets.all(14),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: AppColors.success.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(AppSpacing.radiusMedium),
+              border: Border.all(color: AppColors.success.withOpacity(0.4)),
             ),
-          if (status == OrderStatusConstants.outForDelivery)
-            CustomButton(
-              text: 'Mark as Delivered',
-              icon: Icons.check_circle,
-              backgroundColor: AppColors.success,
-              onPressed: () => _handleStatusUpdate(OrderStatusConstants.delivered, 'Mark this order as successfully delivered?'),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: AppColors.success, size: 24),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '✅ Bill Approved by Customer! Proceed to deliver.',
+                    style: TextStyle(color: AppColors.success, fontWeight: FontWeight.bold, fontSize: 14),
+                  ),
+                ),
+              ],
             ),
+          ),
+          CustomButton(
+            text: 'Out for Delivery',
+            icon: Icons.delivery_dining,
+            backgroundColor: AppColors.primary,
+            onPressed: () => _handleStatusUpdate(OrderStatusConstants.outForDelivery, 'Leaving store for customer now?'),
+          ),
+          const SizedBox(height: 10),
+          CustomButton(
+            text: 'Open Maps Navigation',
+            isOutlined: true,
+            icon: Icons.navigation,
+            onPressed: _openMap,
+          ),
+          const SizedBox(height: 10),
+          CustomButton(
+            text: 'Contact Customer',
+            isOutlined: true,
+            icon: Icons.phone,
+            onPressed: _callCustomer,
+          ),
+        ],
+      );
+    }
+
+    if (status == OrderStatusConstants.outForDelivery) {
+      return Column(
+        children: [
+          CustomButton(
+            text: 'Mark as Delivered',
+            icon: Icons.check_circle,
+            backgroundColor: AppColors.success,
+            onPressed: () => _handleStatusUpdate(OrderStatusConstants.delivered, 'Mark this order as successfully delivered?'),
+          ),
           const SizedBox(height: 10),
           CustomButton(
             text: 'Open Maps Navigation',

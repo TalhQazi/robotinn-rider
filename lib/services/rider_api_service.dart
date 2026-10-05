@@ -18,6 +18,7 @@ class RiderApiService {
   static final FirebaseAuth _auth = FirebaseAuth.instance;
   static final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   static final FirebaseStorage _storage = FirebaseStorage.instance;
+  static final Map<String, String> _userNameCache = {};
 
 
   static int parseTimestamp(dynamic val) {
@@ -417,8 +418,12 @@ class RiderApiService {
   }
 
   static Future<List<OrderModel>> getAvailableOrders() async {
+    final user = _auth.currentUser;
     final snap = await _firestore.collection('orders').where('status', isEqualTo: 'pending').get();
-    final list = snap.docs.map((d) => OrderModel.fromFirestore(d)).toList();
+    final list = snap.docs
+        .map((d) => OrderModel.fromFirestore(d))
+        .where((o) => user == null || !o.rejectedByRiders.contains(user.uid))
+        .toList();
     list.sort((a, b) => parseTimestamp(b.createdAt).compareTo(parseTimestamp(a.createdAt)));
     return list;
   }
@@ -428,7 +433,10 @@ class RiderApiService {
     if (user == null) throw Exception('Authentication required');
 
     final snap = await _firestore.collection('orders').where('rider.id', isEqualTo: user.uid).get();
-    final list = snap.docs.map((d) => OrderModel.fromFirestore(d)).toList();
+    var list = snap.docs.map((d) => OrderModel.fromFirestore(d)).toList();
+
+    // Do not count cancelled orders in rider's orders
+    list = list.where((o) => o.status != OrderStatusConstants.cancelled).toList();
 
     list.sort((a, b) => parseTimestamp(b.createdAt).compareTo(parseTimestamp(a.createdAt)));
 
@@ -436,6 +444,70 @@ class RiderApiService {
       return list.where((o) => OrderStatusConstants.isActive(o.status)).toList();
     }
     return list;
+  }
+
+  static Future<void> declineOrCancelOrder(String orderDocId, String reason) async {
+    final user = _auth.currentUser;
+    if (user == null) throw Exception('Authentication required');
+
+    final riderSnap = await _firestore.collection('users').doc(user.uid).get();
+    final riderData = riderSnap.data() ?? {};
+    final riderName = riderData['name'] ?? 'Rider';
+
+    DocumentReference orderDocRef = _firestore.collection('orders').doc(orderDocId);
+    DocumentSnapshot orderSnap = await orderDocRef.get();
+    String targetDocId = orderDocId;
+    if (!orderSnap.exists) {
+      final qSnap = await _firestore.collection('orders').where('orderId', isEqualTo: orderDocId).limit(1).get();
+      if (qSnap.docs.isNotEmpty) {
+        orderDocRef = qSnap.docs.first.reference;
+        orderSnap = qSnap.docs.first;
+        targetDocId = qSnap.docs.first.id;
+      }
+    }
+
+    final orderData = orderSnap.data() as Map<String, dynamic>? ?? {};
+    final orderCode = orderData['orderId'] ?? targetDocId;
+    final customerId = orderData['customer'] is Map ? orderData['customer']['id']?.toString() : orderData['customerId']?.toString();
+
+    await orderDocRef.update({
+      'status': OrderStatusConstants.pending,
+      'rider': FieldValue.delete(),
+      'riderId': FieldValue.delete(),
+      'riderLocation': FieldValue.delete(),
+      'rejectedByRiders': FieldValue.arrayUnion([user.uid]),
+      'lastDeclineReason': reason,
+      'declinedAt': DateTime.now().toIso8601String(),
+      'updatedAt': DateTime.now().toIso8601String(),
+    });
+
+    // Notify Admin
+    try {
+      await _firestore.collection('notifications').add({
+        'recipient': 'admin',
+        'title': '⚠️ Rider Unassigned Order',
+        'message': 'Rider $riderName declined Order #$orderCode ($reason). Order returned to pending queue for other riders.',
+        'type': 'order_declined',
+        'read': false,
+        'createdAt': DateTime.now().toIso8601String(),
+        'data': {'orderId': targetDocId, 'riderId': user.uid, 'reason': reason},
+      });
+    } catch (_) {}
+
+    // Notify Customer
+    if (customerId != null && customerId.isNotEmpty) {
+      try {
+        await _firestore.collection('notifications').add({
+          'userId': customerId,
+          'title': '🔄 Finding Another Rider',
+          'message': 'Your rider had to unassign ($reason). We are searching for another available rider for Order #$orderCode.',
+          'type': 'order',
+          'read': false,
+          'createdAt': DateTime.now().toIso8601String(),
+          'data': {'orderId': targetDocId},
+        });
+      } catch (_) {}
+    }
   }
 
   static Future<OrderModel> getOrderById(String orderDocId) async {
@@ -469,18 +541,25 @@ class RiderApiService {
     
     if (order != null && order['customer'] is Map && order['customer']['id'] != null) {
       final customerId = order['customer']['id'].toString();
+      final customerName = order['customer']['name']?.toString() ?? 'Customer';
+      final riderName = riderInfo['name']?.toString() ?? 'Rider';
       final orderCode = order['orderId'] ?? orderDocId;
       try {
         await _firestore.collection('notifications').add({
           'userId': customerId,
           'title': 'Order Accepted',
-          'message': 'Rider ${riderInfo['name']} has accepted your order #$orderCode.',
+          'message': 'Rider $riderName has accepted your order #$orderCode.',
           'type': 'order',
           'read': false,
           'createdAt': DateTime.now().toIso8601String(),
           'data': {'orderId': orderDocId},
         });
-        await startConversation(customerId, orderCode.toString());
+        await startConversation(
+          customerId,
+          orderCode.toString(),
+          customerName,
+          riderName,
+        );
       } catch (_) {}
     }
 
@@ -884,14 +963,201 @@ class RiderApiService {
     final list = <ConversationModel>[];
 
     for (var doc in snap.docs) {
-      list.add(ConversationModel.fromMap(doc.data(), user.uid, doc.id));
+      final data = doc.data();
+      var conv = ConversationModel.fromMap(data, user.uid, doc.id);
+
+      if ((conv.participantName == 'Customer' || conv.participantName.isEmpty) &&
+          conv.participantId.isNotEmpty &&
+          conv.participantId != 'support_admin') {
+        String? resolved = _userNameCache[conv.participantId];
+
+        if (resolved == null || resolved.isEmpty) {
+          // 1. Try resolving from orders collection by orderId if available
+          if (conv.orderId != null && conv.orderId!.isNotEmpty) {
+            try {
+              DocumentSnapshot? orderDoc;
+              final directSnap = await _firestore.collection('orders').doc(conv.orderId!).get();
+              if (directSnap.exists) {
+                orderDoc = directSnap;
+              } else {
+                final q = await _firestore.collection('orders').where('orderId', isEqualTo: conv.orderId).limit(1).get();
+                if (q.docs.isNotEmpty) {
+                  orderDoc = q.docs.first;
+                }
+              }
+              if (orderDoc != null && orderDoc.exists) {
+                final od = orderDoc.data() as Map<String, dynamic>? ?? {};
+                final cName = od['customer']?['name']?.toString() ?? od['customerName']?.toString();
+                if (cName != null && cName.trim().isNotEmpty && cName.trim() != 'Customer') {
+                  resolved = cName.trim();
+                }
+              }
+            } catch (_) {}
+          }
+
+          // 2. Try resolving from users collection
+          if (resolved == null || resolved.isEmpty) {
+            try {
+              final userDoc = await _firestore.collection('users').doc(conv.participantId).get();
+              if (userDoc.exists) {
+                final ud = userDoc.data() ?? {};
+                final uName = ud['name']?.toString() ?? ud['displayName']?.toString();
+                if (uName != null && uName.trim().isNotEmpty && uName.trim() != 'Customer') {
+                  resolved = uName.trim();
+                }
+              }
+            } catch (_) {}
+          }
+
+          // 3. Try finding any order where this customer placed an order
+          if (resolved == null || resolved.isEmpty) {
+            try {
+              final oSnap = await _firestore.collection('orders')
+                  .where('customer.id', isEqualTo: conv.participantId)
+                  .limit(1)
+                  .get();
+              if (oSnap.docs.isNotEmpty) {
+                final od = oSnap.docs.first.data();
+                final cName = od['customer']?['name']?.toString() ?? od['customerName']?.toString();
+                if (cName != null && cName.trim().isNotEmpty && cName.trim() != 'Customer') {
+                  resolved = cName.trim();
+                }
+              }
+            } catch (_) {}
+          }
+
+          if (resolved != null && resolved.isNotEmpty) {
+            _userNameCache[conv.participantId] = resolved;
+            doc.reference.update({
+              'participantNames.${conv.participantId}': resolved,
+            }).catchError((_) {});
+          }
+        }
+
+        if (resolved != null && resolved.isNotEmpty) {
+          conv = ConversationModel(
+            id: conv.id,
+            participants: conv.participants,
+            participantId: conv.participantId,
+            participantName: resolved,
+            lastMessage: conv.lastMessage,
+            lastMessageTime: conv.lastMessageTime,
+            orderId: conv.orderId,
+          );
+        }
+      }
+
+      list.add(conv);
     }
 
     list.sort((a, b) => parseTimestamp(b.lastMessageTime).compareTo(parseTimestamp(a.lastMessageTime)));
     return list;
   }
 
-  static Future<String> startConversation(String participantId, [String? orderId]) async {
+  static Stream<List<ConversationModel>> streamConversations() {
+    final user = _auth.currentUser;
+    if (user == null) return const Stream.empty();
+
+    return _firestore
+        .collection('conversations')
+        .where('participants', arrayContains: user.uid)
+        .snapshots()
+        .asyncMap((snap) async {
+          final list = <ConversationModel>[];
+          for (var doc in snap.docs) {
+            final data = doc.data();
+            var conv = ConversationModel.fromMap(data, user.uid, doc.id);
+
+            if ((conv.participantName == 'Customer' || conv.participantName.isEmpty) &&
+                conv.participantId.isNotEmpty &&
+                conv.participantId != 'support_admin') {
+              String? resolved = _userNameCache[conv.participantId];
+
+              if (resolved == null || resolved.isEmpty) {
+                if (conv.orderId != null && conv.orderId!.isNotEmpty) {
+                  try {
+                    DocumentSnapshot? orderDoc;
+                    final directSnap = await _firestore.collection('orders').doc(conv.orderId!).get();
+                    if (directSnap.exists) {
+                      orderDoc = directSnap;
+                    } else {
+                      final q = await _firestore.collection('orders').where('orderId', isEqualTo: conv.orderId).limit(1).get();
+                      if (q.docs.isNotEmpty) {
+                        orderDoc = q.docs.first;
+                      }
+                    }
+                    if (orderDoc != null && orderDoc.exists) {
+                      final od = orderDoc.data() as Map<String, dynamic>? ?? {};
+                      final cName = od['customer']?['name']?.toString() ?? od['customerName']?.toString();
+                      if (cName != null && cName.trim().isNotEmpty && cName.trim() != 'Customer') {
+                        resolved = cName.trim();
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                if (resolved == null || resolved.isEmpty) {
+                  try {
+                    final userDoc = await _firestore.collection('users').doc(conv.participantId).get();
+                    if (userDoc.exists) {
+                      final ud = userDoc.data() ?? {};
+                      final uName = ud['name']?.toString() ?? ud['displayName']?.toString();
+                      if (uName != null && uName.trim().isNotEmpty && uName.trim() != 'Customer') {
+                        resolved = uName.trim();
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                if (resolved == null || resolved.isEmpty) {
+                  try {
+                    final oSnap = await _firestore.collection('orders')
+                        .where('customer.id', isEqualTo: conv.participantId)
+                        .limit(1)
+                        .get();
+                    if (oSnap.docs.isNotEmpty) {
+                      final od = oSnap.docs.first.data();
+                      final cName = od['customer']?['name']?.toString() ?? od['customerName']?.toString();
+                      if (cName != null && cName.trim().isNotEmpty && cName.trim() != 'Customer') {
+                        resolved = cName.trim();
+                      }
+                    }
+                  } catch (_) {}
+                }
+
+                if (resolved != null && resolved.isNotEmpty) {
+                  _userNameCache[conv.participantId] = resolved;
+                  doc.reference.update({
+                    'participantNames.${conv.participantId}': resolved,
+                  }).catchError((_) {});
+                }
+              }
+
+              if (resolved != null && resolved.isNotEmpty) {
+                conv = ConversationModel(
+                  id: conv.id,
+                  participants: conv.participants,
+                  participantId: conv.participantId,
+                  participantName: resolved,
+                  lastMessage: conv.lastMessage,
+                  lastMessageTime: conv.lastMessageTime,
+                  orderId: conv.orderId,
+                );
+              }
+            }
+            list.add(conv);
+          }
+          list.sort((a, b) => parseTimestamp(b.lastMessageTime).compareTo(parseTimestamp(a.lastMessageTime)));
+          return list;
+        });
+  }
+
+  static Future<String> startConversation(
+    String participantId, [
+    String? orderId,
+    String? participantName,
+    String? myName,
+  ]) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Authentication required');
 
@@ -899,12 +1165,29 @@ class RiderApiService {
     for (var doc in snap.docs) {
       final parts = (doc.data()['participants'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [];
       if (parts.contains(participantId)) {
+        final updateData = <String, dynamic>{};
+        if (participantName != null && participantName.isNotEmpty) {
+          updateData['participantNames.$participantId'] = participantName;
+        }
+        if (myName != null && myName.isNotEmpty) {
+          updateData['participantNames.${user.uid}'] = myName;
+        }
+        if (orderId != null && (doc.data()['orderId'] == null || doc.data()['orderId'] == '')) {
+          updateData['orderId'] = orderId;
+        }
+        if (updateData.isNotEmpty) {
+          await doc.reference.update(updateData).catchError((_) {});
+        }
         return doc.id;
       }
     }
 
     final newConv = {
       'participants': [user.uid, participantId],
+      'participantNames': {
+        user.uid: myName ?? (user.displayName ?? 'Rider'),
+        participantId: participantName ?? (participantId == 'support_admin' ? 'RobotInn Support' : 'Customer'),
+      },
       'orderId': orderId,
       'createdAt': DateTime.now().toIso8601String(),
       'lastMessage': null,

@@ -157,6 +157,8 @@ class OrderModel {
   final String createdAt;
   final String? riderId;
   final GeoPoint? riderLocation;
+  final List<String> rejectedByRiders;
+  final String? lastDeclineReason;
 
   OrderModel({
     required this.id,
@@ -176,6 +178,8 @@ class OrderModel {
     this.createdAt = '',
     this.riderId,
     this.riderLocation,
+    this.rejectedByRiders = const [],
+    this.lastDeclineReason,
   });
 
   factory OrderModel.fromFirestore(DocumentSnapshot doc) {
@@ -236,6 +240,9 @@ class OrderModel {
             ? (data['estimatedSubtotal'] as num).toDouble()
             : (double.tryParse(data['estimatedPrice']?.toString() ?? '0') ?? 0.0));
 
+    final rawRejected = data['rejectedByRiders'] as List<dynamic>? ?? [];
+    final rejectedList = rawRejected.map((e) => e.toString()).toList();
+
     return OrderModel(
       id: docId ?? data['id']?.toString() ?? data['_id']?.toString() ?? '',
       orderId: data['orderId']?.toString() ?? docId ?? '',
@@ -254,6 +261,8 @@ class OrderModel {
       createdAt: data['createdAt']?.toString() ?? data['date']?.toString() ?? '',
       riderId: (data['rider'] is Map) ? data['rider']['id']?.toString() : data['riderId']?.toString(),
       riderLocation: data['riderLocation'] is GeoPoint ? data['riderLocation'] as GeoPoint : null,
+      rejectedByRiders: rejectedList,
+      lastDeclineReason: data['lastDeclineReason']?.toString(),
     );
   }
 }

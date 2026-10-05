@@ -21,7 +21,6 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   double _shiftEarnings = 0.0;
-  bool _isRefreshing = false;
 
   @override
   void initState() {
@@ -59,11 +58,9 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   }
 
   Future<void> _onRefresh() async {
-    setState(() => _isRefreshing = true);
     _loadData();
     final now = TimeOfDay.now().format(context);
     context.read<RiderAuthProvider>().setLastUpdatedAt(now);
-    setState(() => _isRefreshing = false);
   }
 
   @override
@@ -79,7 +76,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
     final shiftProv = context.watch<RiderShiftProvider>();
     final isOnline = auth.isShiftActive;
 
-    final allMyOrders = ordersProv.myOrders;
+    final allMyOrders = ordersProv.myOrders.where((o) => o.status != OrderStatusConstants.cancelled).toList();
     final activeCount = ordersProv.activeOrders.length;
     final deliveredCount = shiftProv.currentShift?.ordersCompleted ??
         allMyOrders.where((o) => o.status == OrderStatusConstants.delivered).length;

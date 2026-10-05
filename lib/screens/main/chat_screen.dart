@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_gradients.dart';
@@ -30,6 +31,41 @@ class _ChatScreenState extends State<ChatScreen> {
   final _picker = ImagePicker();
   final String _currentUid = FirebaseAuth.instance.currentUser?.uid ?? '';
   bool _isSending = false;
+  late String _title;
+
+  @override
+  void initState() {
+    super.initState();
+    _title = widget.title;
+    _resolveCustomerName();
+  }
+
+  void _resolveCustomerName() async {
+    if (_title == 'Customer' || _title.isEmpty || _title == 'Chat') {
+      try {
+        final userDoc = await FirebaseFirestore.instance.collection('users').doc(widget.participantId).get();
+        if (userDoc.exists && userDoc.data() != null) {
+          final uName = userDoc.data()!['name']?.toString() ?? userDoc.data()!['displayName']?.toString();
+          if (uName != null && uName.trim().isNotEmpty && uName.trim() != 'Customer') {
+            if (mounted) setState(() => _title = uName.trim());
+            return;
+          }
+        }
+
+        final oSnap = await FirebaseFirestore.instance.collection('orders')
+            .where('customer.id', isEqualTo: widget.participantId)
+            .limit(1)
+            .get();
+        if (oSnap.docs.isNotEmpty) {
+          final od = oSnap.docs.first.data();
+          final cName = od['customer']?['name']?.toString() ?? od['customerName']?.toString();
+          if (cName != null && cName.trim().isNotEmpty && cName.trim() != 'Customer') {
+            if (mounted) setState(() => _title = cName.trim());
+          }
+        }
+      } catch (_) {}
+    }
+  }
 
   @override
   void dispose() {
@@ -83,7 +119,7 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: Text(widget.title),
+        title: Text(_title),
         flexibleSpace: Container(decoration: const BoxDecoration(gradient: AppGradients.header)),
       ),
       body: Column(

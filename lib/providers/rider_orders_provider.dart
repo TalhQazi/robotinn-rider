@@ -58,4 +58,10 @@ class RiderOrdersProvider extends ChangeNotifier {
     await fetchOrders();
     return updated;
   }
+
+  Future<void> declineOrder(String orderDocId, String reason) async {
+    await RiderApiService.declineOrCancelOrder(orderDocId, reason);
+    await fetchOrders();
+  }
 }
+

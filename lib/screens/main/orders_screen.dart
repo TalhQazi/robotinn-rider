@@ -36,14 +36,14 @@ class _OrdersScreenState extends State<OrdersScreen> {
         onSubmit: (mins) async {
           Navigator.pop(ctx);
           try {
-            await context.read<RiderOrdersProvider>().acceptOrder(order.id);
+            final updated = await context.read<RiderOrdersProvider>().acceptOrder(order.id);
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(content: Text('Order #${order.orderId} accepted! Estimated: $mins mins')),
               );
               Navigator.of(context).pushNamed(
                 '/order_details',
-                arguments: {'order': order},
+                arguments: {'order': updated},
               );
             }
           } catch (e) {

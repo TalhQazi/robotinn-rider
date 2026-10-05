@@ -30,11 +30,31 @@ class ConversationModel {
       lastMsg = map['lastMessage'];
     }
 
+    String resolvedName = '';
+    if (map['participantNames'] is Map) {
+      final names = map['participantNames'] as Map;
+      if (names[otherId] != null && names[otherId].toString().trim().isNotEmpty) {
+        resolvedName = names[otherId].toString().trim();
+      }
+    }
+    if (resolvedName.isEmpty && map['customerName'] != null && map['customerName'].toString().trim().isNotEmpty) {
+      resolvedName = map['customerName'].toString().trim();
+    }
+    if (resolvedName.isEmpty && map['participantName'] != null) {
+      final pName = map['participantName'].toString().trim();
+      if (pName.isNotEmpty && pName != 'Customer' && pName != 'Rider') {
+        resolvedName = pName;
+      }
+    }
+    if (resolvedName.isEmpty) {
+      resolvedName = otherId == 'support_admin' ? 'RobotInn Support' : 'Customer';
+    }
+
     return ConversationModel(
       id: id ?? map['id']?.toString() ?? '',
       participants: parts,
       participantId: otherId,
-      participantName: otherId == 'support_admin' ? 'RobotInn Support' : (map['participantName']?.toString() ?? 'Customer'),
+      participantName: resolvedName,
       lastMessage: lastMsg,
       lastMessageTime: lastTime ?? map['createdAt']?.toString(),
       orderId: map['orderId']?.toString(),
