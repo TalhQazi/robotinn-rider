@@ -88,9 +88,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
       }
     } catch (e) {
+      final str = e.toString().toLowerCase();
+      if (str.contains('denied') || str.contains('cancel') || str.contains('not allow')) {
+        debugPrint('Profile photo pick cancelled or denied: $e');
+        return;
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update photo: $e')),
+          const SnackBar(content: Text('Failed to update photo. Please try again.')),
         );
       }
     } finally {

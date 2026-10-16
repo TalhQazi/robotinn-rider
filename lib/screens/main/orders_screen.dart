@@ -260,8 +260,6 @@ class _OrdersScreenState extends State<OrdersScreen> {
     final statusColor = OrderStatusConstants.getColor(order.status);
     final statusLabel = OrderStatusConstants.getLabel(order.status);
     final statusIcon = OrderStatusConstants.getIcon(order.status);
-    final canSubmitBill = ['accepted', 'processing', 'bill_submitted', 'bill_rejected', 'bill_approved', 'picked']
-        .contains(order.status.toLowerCase());
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -407,34 +405,11 @@ class _OrdersScreenState extends State<OrdersScreen> {
                 ],
               ),
 
-              // Active Delivery Buttons (1:1 with React Native OrdersScreen)
+              // Active Delivery Buttons
               if (!isAvailable) ...[
                 const SizedBox(height: 12),
-                if (canSubmitBill)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).pushNamed(
-                          '/active_order',
-                          arguments: {'order': order},
-                        );
-                      },
-                      icon: const Icon(Icons.camera_alt, size: 16),
-                      label: const Text(
-                        'Submit Store Bill to Admin',
-                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                      ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: AppColors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 10),
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      ),
-                    ),
-                  ),
-                if (canSubmitBill) const SizedBox(height: 8),
+                _buildActiveOrderActionButton(order),
+                const SizedBox(height: 8),
                 SizedBox(
                   width: double.infinity,
                   child: OutlinedButton.icon(
@@ -459,6 +434,172 @@ class _OrdersScreenState extends State<OrdersScreen> {
               ],
             ],
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildActiveOrderActionButton(OrderModel order) {
+    final normStatus = OrderStatusConstants.normalize(order.status);
+
+    // 1. Bill Submitted -> Awaiting Admin Approval
+    if (normStatus == OrderStatusConstants.billSubmitted) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFDE68A)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.hourglass_top_rounded, size: 16, color: Color(0xFFD97706)),
+            SizedBox(width: 8),
+            Text(
+              'Awaiting Admin Approval',
+              style: TextStyle(color: Color(0xFF92400E), fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 2. Sent to Customer / Waiting for Customer Approval
+    if (normStatus == OrderStatusConstants.adjustmentPending ||
+        normStatus == 'sent_to_customer' ||
+        normStatus == 'customer_approval') {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFBFDBFE)),
+        ),
+        child: const Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.schedule_rounded, size: 16, color: Color(0xFF2563EB)),
+            SizedBox(width: 8),
+            Text(
+              'Awaiting Customer Approval',
+              style: TextStyle(color: Color(0xFF1E40AF), fontSize: 13, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 3. Bill Approved -> Ready to Deliver
+    if (normStatus == OrderStatusConstants.billApproved || normStatus == 'customer_approved') {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.of(context).pushNamed(
+              '/order_details',
+              arguments: {'order': order},
+            );
+          },
+          icon: const Icon(Icons.delivery_dining, size: 18),
+          label: const Text(
+            'Bill Approved — Start Delivery',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF10B981),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+      );
+    }
+
+    // 4. Out for Delivery / Picked
+    if (normStatus == OrderStatusConstants.outForDelivery) {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: () {
+            Navigator.of(context).pushNamed(
+              '/order_details',
+              arguments: {'order': order},
+            );
+          },
+          icon: const Icon(Icons.navigation_outlined, size: 16),
+          label: const Text(
+            'Out for Delivery — View Order',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.primary,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+      );
+    }
+
+    // 5. Bill Rejected -> Re-submit
+    if (normStatus == OrderStatusConstants.billRejected) {
+      return SizedBox(
+        width: double.infinity,
+        child: ElevatedButton.icon(
+          onPressed: () async {
+            final res = await Navigator.of(context).pushNamed(
+              '/active_order',
+              arguments: {'order': order},
+            );
+            if (res == true && mounted) {
+              context.read<RiderOrdersProvider>().fetchOrders();
+            }
+          },
+          icon: const Icon(Icons.refresh, size: 16),
+          label: const Text(
+            'Bill Rejected — Re-submit Store Bill',
+            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppColors.error,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            elevation: 0,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          ),
+        ),
+      );
+    }
+
+    // 6. Default (Accepted / Shopping) -> Submit Store Bill to Admin
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton.icon(
+        onPressed: () async {
+          final res = await Navigator.of(context).pushNamed(
+            '/active_order',
+            arguments: {'order': order},
+          );
+          if (res == true && mounted) {
+            context.read<RiderOrdersProvider>().fetchOrders();
+          }
+        },
+        icon: const Icon(Icons.camera_alt, size: 16),
+        label: const Text(
+          'Submit Store Bill to Admin',
+          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+        ),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: AppColors.white,
+          padding: const EdgeInsets.symmetric(vertical: 10),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
       ),
     );

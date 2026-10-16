@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../theme/app_colors.dart';
 import '../../theme/app_gradients.dart';
@@ -9,7 +10,10 @@ import '../../components/common/custom_text_field.dart';
 import '../../components/common/themed_alert.dart';
 import '../../components/order/bill_source_picker_modal.dart';
 import '../../components/order/bill_image_preview_modal.dart';
+import '../../constants/order_status.dart';
 import '../../models/order_model.dart';
+import 'package:provider/provider.dart';
+import '../../providers/rider_orders_provider.dart';
 import '../../services/rider_api_service.dart';
 
 class ActiveOrderScreen extends StatefulWidget {
@@ -81,9 +85,41 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
           }
         });
       }
-    } catch (e) {
+    } on PlatformException catch (e) {
+      final code = e.code.toLowerCase();
+      final msg = (e.message ?? '').toLowerCase();
+      // Silently return if user denied camera/photo access or cancelled
+      if (code.contains('denied') ||
+          code.contains('cancel') ||
+          msg.contains('denied') ||
+          msg.contains('cancel') ||
+          msg.contains('not allow')) {
+        debugPrint('Receipt capture permission denied or cancelled: ${e.code}');
+        return;
+      }
       if (mounted) {
-        ThemedAlert.show(context, title: 'Error', message: 'Could not access image: $e');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not open ${source == ImageSource.camera ? 'camera' : 'gallery'}.'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      final str = e.toString().toLowerCase();
+      if (str.contains('denied') ||
+          str.contains('cancel') ||
+          str.contains('not allow')) {
+        debugPrint('Receipt capture cancelled or denied: $e');
+        return;
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not attach receipt image. Please try again.'),
+            duration: Duration(seconds: 2),
+          ),
+        );
       }
     }
   }
@@ -132,6 +168,7 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
       );
 
       if (mounted) {
+        context.read<RiderOrdersProvider>().fetchOrders();
         ThemedAlert.show(
           context,
           title: '✅ Submitted to Admin',
@@ -139,7 +176,10 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
           buttons: [
             AlertActionItem(
               text: 'OK',
-              onPress: () => Navigator.pop(context),
+              onPress: () {
+                Navigator.of(context).pop();
+                Navigator.of(context).pop(true);
+              },
             ),
           ],
         );
@@ -178,7 +218,29 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-         
+            if (OrderStatusConstants.normalize(order.status) == OrderStatusConstants.billSubmitted) ...[
+              Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFFBEB),
+                  borderRadius: BorderRadius.circular(AppSpacing.radiusMedium),
+                  border: Border.all(color: const Color(0xFFFDE68A)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.hourglass_top_rounded, color: Color(0xFFD97706), size: 20),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Store bill was submitted and is currently awaiting Admin approval. You may update items or receipts below if needed.',
+                        style: TextStyle(color: Color(0xFF92400E), fontSize: 13, fontWeight: FontWeight.w600),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             Container(
               padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
@@ -309,19 +371,23 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
                                   ),
                                   const SizedBox(width: 12),
                                   Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Receipt #${idx + 1}',
-                                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        const Text(
-                                          'Tap image to preview',
-                                          style: TextStyle(fontSize: 11, color: AppColors.primary),
-                                        ),
-                                      ],
+                                    child: GestureDetector(
+                                      onTap: () => _previewReceipt(file),
+                                      behavior: HitTestBehavior.opaque,
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            'Receipt #${idx + 1}',
+                                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          const Text(
+                                            'Tap image to preview',
+                                            style: TextStyle(fontSize: 11, color: AppColors.primary),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                   IconButton(
@@ -417,7 +483,9 @@ class _ActiveOrderScreenState extends State<ActiveOrderScreen> {
 
           
             CustomButton(
-              text: 'Submit to Admin',
+              text: OrderStatusConstants.normalize(order.status) == OrderStatusConstants.billSubmitted
+                  ? 'Update Bill & Re-submit to Admin'
+                  : 'Submit to Admin',
               isLoading: _isSubmitting,
               onPressed: _handleSubmit,
             ),

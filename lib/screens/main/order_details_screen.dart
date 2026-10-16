@@ -453,10 +453,11 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                                 ),
                                 child: ClipRRect(
                                   borderRadius: BorderRadius.circular(8),
-                                  child: Image.network(
+                                  child: BillImagePreviewModal.buildThumbnail(
                                     att.fileUrl,
+                                    width: 70,
+                                    height: 70,
                                     fit: BoxFit.cover,
-                                    errorBuilder: (_, __, ___) => const Icon(Icons.receipt),
                                   ),
                                 ),
                               ),

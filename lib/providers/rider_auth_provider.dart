@@ -13,6 +13,8 @@ class RiderAuthProvider extends ChangeNotifier {
   bool _isAuthenticated = false;
   bool _isLoading = true;
   bool _isShiftActive = false;
+  bool _isTogglingShift = false;
+  DateTime? _lastShiftToggleTime;
   List<NotificationModel> _notifications = [];
   int _unreadCount = 0;
   String? _lastUpdatedAt;
@@ -22,6 +24,7 @@ class RiderAuthProvider extends ChangeNotifier {
   bool get isAuthenticated => _isAuthenticated;
   bool get isLoading => _isLoading;
   bool get isShiftActive => _isShiftActive;
+  bool get isTogglingShift => _isTogglingShift;
   List<NotificationModel> get notifications => _notifications;
   int get unreadCount => _unreadCount;
   String? get lastUpdatedAt => _lastUpdatedAt;
@@ -140,14 +143,31 @@ class RiderAuthProvider extends ChangeNotifier {
   }
 
   Future<void> toggleShift() async {
-    final next = !_isShiftActive;
+    if (_isTogglingShift) return;
+
+    final now = DateTime.now();
+    if (_lastShiftToggleTime != null) {
+      final elapsed = now.difference(_lastShiftToggleTime!).inSeconds;
+      if (elapsed < 4) {
+        throw Exception('Please wait ${4 - elapsed}s before changing shift status again.');
+      }
+    }
+
+    _isTogglingShift = true;
+    notifyListeners();
+
     try {
+      final next = !_isShiftActive;
       await RiderApiService.toggleShift(next);
       _isShiftActive = next;
+      _lastShiftToggleTime = DateTime.now();
       await StorageService.setObject(AppConstants.keyShiftStatus, {'active': next});
       notifyListeners();
     } catch (e) {
       rethrow;
+    } finally {
+      _isTogglingShift = false;
+      notifyListeners();
     }
   }
 

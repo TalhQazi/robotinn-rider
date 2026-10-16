@@ -5,6 +5,7 @@ import '../../theme/app_colors.dart';
 import '../../components/common/custom_button.dart';
 import '../../components/common/custom_text_field.dart';
 import '../../services/rider_api_service.dart';
+import '../../utils/auth_error_helper.dart';
 
 enum PhotoFieldType {
   drivingLicense,
@@ -193,7 +194,7 @@ class _SignupScreenState extends State<SignupScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _errorMessage = e.toString().replaceAll('Exception:', '').trim();
+          _errorMessage = AuthErrorHelper.parse(e);
         });
       }
     } finally {

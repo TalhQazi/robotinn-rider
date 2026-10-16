@@ -5,6 +5,7 @@ import '../../components/common/custom_button.dart';
 import '../../components/common/custom_text_field.dart';
 import '../../components/common/themed_alert.dart';
 import '../../services/rider_api_service.dart';
+import '../../utils/auth_error_helper.dart';
 
 class CreateNewPasswordScreen extends StatefulWidget {
   final String email;
@@ -53,7 +54,7 @@ class _CreateNewPasswordScreenState extends State<CreateNewPasswordScreen> {
         ThemedAlert.show(
           context,
           title: 'Verification Failed',
-          message: e.toString().replaceAll('Exception:', '').trim(),
+          message: AuthErrorHelper.parse(e),
         );
       }
     } finally {

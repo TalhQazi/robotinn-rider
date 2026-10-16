@@ -245,13 +245,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(8),
-                  child: Image.network(
-                    msg.mediaUrl!,
+                  child: BillImagePreviewModal.buildThumbnail(
+                    msg.mediaUrl,
                     height: 180,
                     width: double.infinity,
                     fit: BoxFit.cover,
-                    loadingBuilder: (_, child, prog) =>
-                        prog == null ? child : const Center(child: CircularProgressIndicator()),
                   ),
                 ),
               ),

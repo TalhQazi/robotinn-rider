@@ -220,14 +220,28 @@ class OrderModel {
 
     
     final attsList = <BillAttachmentModel>[];
-    if (data['billAttachments'] is List) {
+    if (data['billAttachments'] is List && (data['billAttachments'] as List).isNotEmpty) {
       for (var a in (data['billAttachments'] as List)) {
         if (a is Map<String, dynamic>) {
           attsList.add(BillAttachmentModel.fromMap(a));
         }
       }
-    } else if (billObj != null && billObj.attachments.isNotEmpty) {
+    }
+    if (attsList.isEmpty && billObj != null && billObj.attachments.isNotEmpty) {
       attsList.addAll(billObj.attachments);
+    }
+    final primaryReceipt = billObj?.receiptImageUrl.isNotEmpty == true
+        ? billObj!.receiptImageUrl
+        : (data['receiptImageUrl']?.toString() ??
+            (data['bill'] is Map ? data['bill']['receiptImageUrl']?.toString() : null) ??
+            '');
+    if (attsList.isEmpty && primaryReceipt.isNotEmpty) {
+      attsList.add(BillAttachmentModel(
+        id: 'primary_rec',
+        fileUrl: primaryReceipt,
+        fileName: 'Store Receipt',
+        uploadTime: '',
+      ));
     }
 
     final totalVal = (data['total'] is num)

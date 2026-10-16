@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/order_model.dart';
 import '../services/rider_api_service.dart';
@@ -7,7 +8,14 @@ class RiderOrdersProvider extends ChangeNotifier {
   List<OrderModel> _availableOrders = [];
   List<OrderModel> _myOrders = [];
   bool _isLoading = false;
-  String _selectedTab = 'available'; 
+  String _selectedTab = 'available';
+
+  StreamSubscription<List<OrderModel>>? _myOrdersSub;
+  StreamSubscription<List<OrderModel>>? _availOrdersSub;
+
+  RiderOrdersProvider() {
+    startOrdersStream();
+  }
 
   List<OrderModel> get availableOrders => _availableOrders;
   List<OrderModel> get myOrders => _myOrders;
@@ -20,6 +28,21 @@ class RiderOrdersProvider extends ChangeNotifier {
   void setSelectedTab(String tab) {
     _selectedTab = tab;
     notifyListeners();
+  }
+
+  void startOrdersStream() {
+    _myOrdersSub?.cancel();
+    _availOrdersSub?.cancel();
+
+    _myOrdersSub = RiderApiService.streamMyOrders().listen((orders) {
+      _myOrders = orders;
+      notifyListeners();
+    });
+
+    _availOrdersSub = RiderApiService.streamAvailableOrders().listen((orders) {
+      _availableOrders = orders;
+      notifyListeners();
+    });
   }
 
   Future<void> fetchOrders() async {
@@ -63,5 +86,11 @@ class RiderOrdersProvider extends ChangeNotifier {
     await RiderApiService.declineOrCancelOrder(orderDocId, reason);
     await fetchOrders();
   }
-}
 
+  @override
+  void dispose() {
+    _myOrdersSub?.cancel();
+    _availOrdersSub?.cancel();
+    super.dispose();
+  }
+}

@@ -5,6 +5,7 @@ import '../../components/common/custom_button.dart';
 import '../../components/common/custom_text_field.dart';
 import '../../components/common/themed_alert.dart';
 import '../../services/rider_api_service.dart';
+import '../../utils/auth_error_helper.dart';
 
 class ForgotPasswordScreen extends StatefulWidget {
   const ForgotPasswordScreen({super.key});
@@ -44,7 +45,7 @@ class _ForgotPasswordScreenState extends State<ForgotPasswordScreen> {
         ThemedAlert.show(
           context,
           title: 'Error',
-          message: e.toString().replaceAll('Exception:', '').trim(),
+          message: AuthErrorHelper.parse(e),
         );
       }
     } finally {

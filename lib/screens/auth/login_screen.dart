@@ -6,6 +6,7 @@ import '../../components/common/custom_button.dart';
 import '../../components/common/custom_text_field.dart';
 import '../../components/common/themed_alert.dart';
 import '../../providers/rider_auth_provider.dart';
+import '../../utils/auth_error_helper.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -41,9 +42,9 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } catch (err) {
       if (!mounted) return;
-      final msg = err.toString().replaceAll('Exception:', '').trim();
-      if (msg.startsWith('BANNED:')) {
-        final reason = msg.replaceFirst('BANNED:', '').trim();
+      final raw = err.toString().replaceAll('Exception:', '').trim();
+      if (raw.startsWith('BANNED:')) {
+        final reason = raw.replaceFirst('BANNED:', '').trim();
         ThemedAlert.show(
           context,
           title: 'Account Suspended',
@@ -53,7 +54,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ThemedAlert.show(
           context,
           title: 'Login Failed',
-          message: msg.isNotEmpty ? msg : 'Incorrect email or password. Please try again.',
+          message: AuthErrorHelper.parse(err),
         );
       }
     } finally {

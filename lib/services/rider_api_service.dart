@@ -446,6 +446,30 @@ class RiderApiService {
     return list;
   }
 
+  static Stream<List<OrderModel>> streamAvailableOrders() {
+    final user = _auth.currentUser;
+    return _firestore.collection('orders').where('status', isEqualTo: 'pending').snapshots().map((snap) {
+      final list = snap.docs
+          .map((d) => OrderModel.fromFirestore(d))
+          .where((o) => user == null || !o.rejectedByRiders.contains(user.uid))
+          .toList();
+      list.sort((a, b) => parseTimestamp(b.createdAt).compareTo(parseTimestamp(a.createdAt)));
+      return list;
+    });
+  }
+
+  static Stream<List<OrderModel>> streamMyOrders() {
+    final user = _auth.currentUser;
+    if (user == null) return const Stream.empty();
+
+    return _firestore.collection('orders').where('rider.id', isEqualTo: user.uid).snapshots().map((snap) {
+      var list = snap.docs.map((d) => OrderModel.fromFirestore(d)).toList();
+      list = list.where((o) => o.status != OrderStatusConstants.cancelled).toList();
+      list.sort((a, b) => parseTimestamp(b.createdAt).compareTo(parseTimestamp(a.createdAt)));
+      return list;
+    });
+  }
+
   static Future<void> declineOrCancelOrder(String orderDocId, String reason) async {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Authentication required');
@@ -754,10 +778,22 @@ class RiderApiService {
     final user = _auth.currentUser;
     if (user == null) throw Exception('Authentication required');
 
-    final shiftId = 'SHF-${DateTime.now().millisecondsSinceEpoch}';
     final geoPoint = (lat != null && lng != null) ? GeoPoint(lat, lng) : null;
 
     if (isActive) {
+      // 1. Prevent duplicate active shifts
+      final activeSnap = await _firestore
+          .collection('shifts')
+          .where('riderId', isEqualTo: user.uid)
+          .where('active', isEqualTo: true)
+          .limit(1)
+          .get();
+
+      if (activeSnap.docs.isNotEmpty) {
+        return; // Already in an active shift, do not create duplicate
+      }
+
+      final shiftId = 'SHF-${DateTime.now().millisecondsSinceEpoch}';
       final newShift = {
         'id': shiftId,
         'shiftId': shiftId,
@@ -767,6 +803,8 @@ class RiderApiService {
         'endTime': null,
         'active': true,
         'startLocation': geoPoint,
+        'ordersCompleted': 0,
+        'earnings': 0.0,
       };
       await _firestore.collection('shifts').doc(shiftId).set(newShift);
     } else {
@@ -775,6 +813,8 @@ class RiderApiService {
           .where('riderId', isEqualTo: user.uid)
           .where('active', isEqualTo: true)
           .get();
+
+      if (activeSnap.docs.isEmpty) return;
 
       final ordersSnap = await _firestore.collection('orders').where('rider.id', isEqualTo: user.uid).get();
 
@@ -798,14 +838,21 @@ class RiderApiService {
           }
         }
 
-        batch.update(doc.reference, {
-          'active': false,
-          'endTime': DateTime.now().toIso8601String(),
-          'endedAt': DateTime.now().toIso8601String(),
-          'earnings': shiftEarningsSum,
-          'ordersCompleted': shiftOrdersCount,
-          'endLocation': geoPoint,
-        });
+        final durationMs = shiftEnd - shiftStart;
+        // If accidental toggle: shift lasted less than 60 seconds AND had 0 completed orders, discard it
+        if (durationMs < 60000 && shiftOrdersCount == 0) {
+          batch.delete(doc.reference);
+        } else {
+          batch.update(doc.reference, {
+            'active': false,
+            'endTime': DateTime.now().toIso8601String(),
+            'endedAt': DateTime.now().toIso8601String(),
+            'earnings': shiftEarningsSum,
+            'ordersCompleted': shiftOrdersCount,
+            'endLocation': geoPoint,
+            'duration': durationMs > 0 ? (durationMs ~/ 60000) : 0,
+          });
+        }
       }
       await batch.commit();
     }
@@ -857,7 +904,25 @@ class RiderApiService {
     if (user == null) return [];
 
     final snap = await _firestore.collection('shifts').where('riderId', isEqualTo: user.uid).get();
-    final list = snap.docs.map((d) => ShiftModel.fromFirestore(d)).toList();
+    final list = <ShiftModel>[];
+    final batch = _firestore.batch();
+    bool hasDeletes = false;
+
+    for (var doc in snap.docs) {
+      final s = ShiftModel.fromFirestore(doc);
+      // Clean up past accidental dummy shifts (completed with 0 orders and 0 duration)
+      if (!s.active && s.durationMinutes == 0 && s.ordersCompleted == 0 && s.earnings == 0) {
+        batch.delete(doc.reference);
+        hasDeletes = true;
+        continue;
+      }
+      list.add(s);
+    }
+
+    if (hasDeletes) {
+      batch.commit().catchError((_) {});
+    }
+
     list.sort((a, b) => parseTimestamp(b.startTime).compareTo(parseTimestamp(a.startTime)));
     return list;
   }

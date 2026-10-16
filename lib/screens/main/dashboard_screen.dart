@@ -9,6 +9,7 @@ import '../../models/order_model.dart';
 import '../../providers/rider_auth_provider.dart';
 import '../../providers/rider_orders_provider.dart';
 import '../../providers/rider_shift_provider.dart';
+import '../../components/common/themed_alert.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -158,43 +159,64 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                     ),
                  
                     GestureDetector(
-                      onTap: () async {
-                        try {
-                          await auth.toggleShift();
-                          _loadData();
-                        } catch (e) {
-                          if (context.mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(content: Text('Shift error: $e')),
-                            );
-                          }
-                        }
-                      },
-                      child: Container(
+                      onTap: auth.isTogglingShift
+                          ? null
+                          : () async {
+                              try {
+                                await auth.toggleShift();
+                                _loadData();
+                              } catch (e) {
+                                if (context.mounted) {
+                                  final msg = e.toString().replaceAll('Exception:', '').trim();
+                                  ThemedAlert.show(
+                                    context,
+                                    title: 'Shift Status',
+                                    message: msg,
+                                  );
+                                }
+                              }
+                            },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                         decoration: BoxDecoration(
-                          color: AppColors.white.withOpacity(0.25),
+                          color: AppColors.white.withOpacity(auth.isTogglingShift ? 0.15 : 0.25),
                           borderRadius: BorderRadius.circular(20),
                           border: Border.all(color: AppColors.white.withOpacity(0.4)),
                         ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.power_settings_new,
-                              size: 16,
-                              color: isOnline ? const Color(0xFF4CD964) : AppColors.white,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              isOnline ? 'Shift On' : 'Shift Off',
-                              style: const TextStyle(
-                                color: AppColors.white,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 13,
+                        child: auth.isTogglingShift
+                            ? const SizedBox(
+                                width: 68,
+                                height: 16,
+                                child: Center(
+                                  child: SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Row(
+                                children: [
+                                  Icon(
+                                    Icons.power_settings_new,
+                                    size: 16,
+                                    color: isOnline ? const Color(0xFF4CD964) : AppColors.white,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    isOnline ? 'Shift On' : 'Shift Off',
+                                    style: const TextStyle(
+                                      color: AppColors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                ],
                               ),
-                            ),
-                          ],
-                        ),
                       ),
                     ),
                   ],
@@ -546,24 +568,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                   ),
                   Row(
                     children: [
-                      if (isActive)
-                        ElevatedButton.icon(
-                          onPressed: () {
-                            Navigator.of(context).pushNamed(
-                              '/active_order',
-                              arguments: {'order': order},
-                            );
-                          },
-                          icon: const Icon(Icons.camera_alt, size: 14),
-                          label: const Text('Upload Bill', style: TextStyle(fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            foregroundColor: AppColors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
+                      _buildDashboardActionButton(order),
                       const SizedBox(width: 8),
                       OutlinedButton(
                         onPressed: () {
@@ -588,5 +593,145 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         ),
       ),
     );
+  }
+
+  Widget _buildDashboardActionButton(OrderModel order) {
+    final normStatus = OrderStatusConstants.normalize(order.status);
+
+    // 1. Bill Submitted -> Awaiting Admin Approval
+    if (normStatus == OrderStatusConstants.billSubmitted) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBEB),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFFDE68A)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.hourglass_top_rounded, size: 13, color: Color(0xFFD97706)),
+            SizedBox(width: 4),
+            Text(
+              'Awaiting Admin',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF92400E)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 2. Sent to Customer / Waiting for Customer Approval
+    if (normStatus == OrderStatusConstants.adjustmentPending ||
+        normStatus == 'sent_to_customer' ||
+        normStatus == 'customer_approval') {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFBFDBFE)),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.schedule_rounded, size: 13, color: Color(0xFF2563EB)),
+            SizedBox(width: 4),
+            Text(
+              'Customer Review',
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF1E40AF)),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // 3. Bill Approved -> Ready to Deliver
+    if (normStatus == OrderStatusConstants.billApproved || normStatus == 'customer_approved') {
+      return ElevatedButton.icon(
+        onPressed: () {
+          Navigator.of(context).pushNamed(
+            '/order_details',
+            arguments: {'order': order},
+          );
+        },
+        icon: const Icon(Icons.delivery_dining, size: 14),
+        label: const Text('Start Delivery', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: const Color(0xFF10B981),
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+
+    // 4. Out for Delivery / Picked
+    if (normStatus == OrderStatusConstants.outForDelivery) {
+      return ElevatedButton.icon(
+        onPressed: () {
+          Navigator.of(context).pushNamed(
+            '/order_details',
+            arguments: {'order': order},
+          );
+        },
+        icon: const Icon(Icons.navigation_outlined, size: 14),
+        label: const Text('Delivering', style: TextStyle(fontSize: 12)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+
+    // 5. Bill Rejected -> Re-submit
+    if (normStatus == OrderStatusConstants.billRejected) {
+      return ElevatedButton.icon(
+        onPressed: () async {
+          final res = await Navigator.of(context).pushNamed(
+            '/active_order',
+            arguments: {'order': order},
+          );
+          if (res == true && mounted) _loadData();
+        },
+        icon: const Icon(Icons.refresh, size: 14),
+        label: const Text('Re-upload Bill', style: TextStyle(fontSize: 12)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.error,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+
+    // 6. Default (Accepted / Shopping) -> Upload Bill button
+    if (OrderStatusConstants.isActive(order.status)) {
+      return ElevatedButton.icon(
+        onPressed: () async {
+          final res = await Navigator.of(context).pushNamed(
+            '/active_order',
+            arguments: {'order': order},
+          );
+          if (res == true && mounted) _loadData();
+        },
+        icon: const Icon(Icons.camera_alt, size: 14),
+        label: const Text('Upload Bill', style: TextStyle(fontSize: 12)),
+        style: ElevatedButton.styleFrom(
+          backgroundColor: AppColors.primary,
+          foregroundColor: AppColors.white,
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          elevation: 0,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+      );
+    }
+
+    return const SizedBox.shrink();
   }
 }
